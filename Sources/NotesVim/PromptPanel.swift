@@ -2,74 +2,63 @@ import AppKit
 
 /// The command-line bar for ":" commands and "/" "?" searches, shown as a
 /// small floating panel at the bottom of the Notes window.
-final class PromptPanel: NSObject, NSTextFieldDelegate {
-    var onSubmit: ((String) -> Void)?
-    var onCancel: (() -> Void)?
-
+///
+/// It only displays the command. It never takes keyboard focus: Notes stays the
+/// active app, and the keys typed into the bar arrive through the key tap.
+final class PromptPanel {
     private let panel: NSPanel
-    private let prefixLabel = NSTextField(labelWithString: "")
-    private let field = NSTextField(string: "")
+    private let textLabel = NSTextField(labelWithString: "")
     private let descLabel = NSTextField(labelWithString: "")
-    private var finished = false
+    private var prefix = ""
 
-    var isOpen: Bool { panel.isVisible }
+    private(set) var isOpen = false
 
-    override init() {
-        panel = NSPanel(
+    init() {
+        panel = DisplayOnlyPanel(
             contentRect: NSRect(x: 0, y: 0, width: 560, height: 34),
-            styleMask: [.titled, .fullSizeContentView],
+            styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView],
             backing: .buffered,
             defer: true
         )
-        super.init()
-
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
-        panel.isMovableByWindowBackground = true
         panel.level = .floating
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
+        panel.ignoresMouseEvents = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.standardWindowButton(.closeButton)?.isHidden = true
         panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
         panel.standardWindowButton(.zoomButton)?.isHidden = true
 
-        let mono = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
-        prefixLabel.font = mono
-        field.font = mono
-        field.isBordered = false
-        field.drawsBackground = false
-        field.focusRingType = .none
-        field.delegate = self
-        field.cell?.usesSingleLineMode = true
-        field.cell?.isScrollable = true
+        textLabel.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        textLabel.lineBreakMode = .byTruncatingHead // long commands keep their end (and the caret) visible
         descLabel.font = NSFont.systemFont(ofSize: 11)
         descLabel.textColor = .secondaryLabelColor
 
-        let row = NSStackView(views: [prefixLabel, field, descLabel])
+        let row = NSStackView(views: [textLabel, descLabel])
         row.orientation = .horizontal
-        row.spacing = 4
+        row.spacing = 8
         row.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
         row.translatesAutoresizingMaskIntoConstraints = false
-        prefixLabel.setContentHuggingPriority(.required, for: .horizontal)
+        textLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         descLabel.setContentHuggingPriority(.required, for: .horizontal)
-        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         let content = NSView()
         content.addSubview(row)
         NSLayoutConstraint.activate([
             row.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            row.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            row.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor),
             row.centerYAnchor.constraint(equalTo: content.centerYAnchor),
         ])
         panel.contentView = content
     }
 
     func open(prefix: String, desc: String, value: String, under windowFrame: NSRect?) {
-        finished = false
-        prefixLabel.stringValue = prefix
+        self.prefix = prefix
         descLabel.stringValue = desc
         descLabel.isHidden = desc.isEmpty
-        field.stringValue = value
+        update(value: value)
 
         let size = panel.frame.size
         var origin: NSPoint
@@ -81,43 +70,23 @@ final class PromptPanel: NSObject, NSTextFieldDelegate {
             origin = .zero
         }
         panel.setFrameOrigin(origin)
+        panel.orderFrontRegardless()
+        isOpen = true
+    }
 
-        if #available(macOS 14.0, *) {
-            NSApp.activate()
-        } else {
-            NSApp.activate(ignoringOtherApps: true)
-        }
-        panel.makeKeyAndOrderFront(nil)
-        panel.makeFirstResponder(field)
-        field.currentEditor()?.selectedRange = NSRange(location: value.utf16.count, length: 0)
+    func update(value: String) {
+        textLabel.stringValue = prefix + value + "▏"
     }
 
     func close() {
-        finished = true
+        isOpen = false
         panel.orderOut(nil)
     }
+}
 
-    // Enter submits, Escape cancels.
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-        if selector == #selector(NSResponder.insertNewline(_:)) {
-            guard !finished else { return true }
-            finished = true
-            onSubmit?(field.stringValue)
-            return true
-        }
-        if selector == #selector(NSResponder.cancelOperation(_:)) {
-            guard !finished else { return true }
-            finished = true
-            onCancel?()
-            return true
-        }
-        // Backspace on an empty line leaves the prompt, like Vim.
-        if selector == #selector(NSResponder.deleteBackward(_:)) && field.stringValue.isEmpty {
-            guard !finished else { return true }
-            finished = true
-            onCancel?()
-            return true
-        }
-        return false
-    }
+/// A panel that can never become the key window, so showing it can't take
+/// keyboard focus away from Notes.
+private final class DisplayOnlyPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
 }

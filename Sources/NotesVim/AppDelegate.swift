@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, VimHost {
     private var errorItem: NSMenuItem!
 
     private var mode = "normal"
+    private var status = "" // e.g. "recording @a", shown after the mode
     private var notification: (text: String, until: Date)?
     private var permissionTimer: Timer?
 
@@ -39,25 +40,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, VimHost {
         self.engine = engine
         engine.start(vimrc: try? String(contentsOf: Self.vimrcURL, encoding: .utf8), blockCursor: blockCursor)
 
-        prompt.onSubmit = { [weak self] value in
-            guard let self else { return }
-            self.engine?.promptSubmit(value)
-            self.prompt.close()
-            self.notes.activateNotes()
-        }
-        prompt.onCancel = { [weak self] in
-            guard let self else { return }
-            self.engine?.promptCancel()
-            self.prompt.close()
-            self.notes.activateNotes()
-        }
-
         tap.handler = { [weak self] event in self?.handle(event) ?? false }
 
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            self?.updateStatusTitle()
+            guard let self else { return }
+            // Leaving Notes abandons a half-typed ":" or "/" command.
+            if self.prompt.isOpen && !self.notes.isNotesFrontmost { self.engine?.promptCancel() }
+            self.updateStatusTitle()
         }
 
         startWhenTrusted()
@@ -92,7 +83,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, VimHost {
     private var pendingPassThrough: (count: Int, start: Int, length: Int)?
 
     private func handle(_ event: CGEvent) -> Bool {
-        guard enabled, let engine, !prompt.isOpen, notes.isNotesFrontmost else { return false }
+        guard enabled, let engine, notes.isNotesFrontmost else { return false }
+        if prompt.isOpen { return handlePromptKey(event, engine) }
         guard notes.refreshFocusedTextArea() else { return false } // only in the note body
         guard let key = VimKeyEvent(event) else {
             notePassThrough()
@@ -112,6 +104,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, VimHost {
         if !used { notePassThrough() }
         refreshErrorItem()
         return used
+    }
+
+    /// While the ":" / "/" bar is open, Notes keeps focus and every key is
+    /// typed into the bar by the engine, so nothing reaches the note.
+    /// ⌘ shortcuts still go to Notes, except ⌘V, which pastes into the bar.
+    private func handlePromptKey(_ event: CGEvent, _ engine: VimEngine) -> Bool {
+        guard let key = VimKeyEvent(event) else { return true }
+        if key.cmd && key.key.lowercased() != "v" { return false }
+        _ = engine.handleKey(key)
+        refreshErrorItem()
+        return true
     }
 
     private func notePassThrough() {
@@ -149,10 +152,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, VimHost {
         prompt.open(prefix: prefix, desc: desc, value: value, under: notes.focusedWindowFrame())
     }
 
+    func vimUpdatePrompt(_ value: String) {
+        prompt.update(value: value)
+    }
+
     func vimClosePrompt() {
-        guard prompt.isOpen else { return }
         prompt.close()
-        notes.activateNotes()
+    }
+
+    func vimSetStatus(_ text: String) {
+        status = text
+        updateStatusTitle()
     }
 
     // MARK: - Menu bar
@@ -229,7 +239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, VimHost {
             "normal": "NORMAL", "insert": "INSERT", "visual": "VISUAL",
             "visual line": "V-LINE", "visual block": "V-BLOCK", "replace": "REPLACE",
         ]
-        button.title = "-- \(names[mode] ?? mode.uppercased()) --"
+        button.title = "-- \(names[mode] ?? mode.uppercased()) --" + (status.isEmpty ? "" : " \(status)")
     }
 
     private func updateMenuState() {
@@ -241,6 +251,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, VimHost {
         if let error = notes.lastError {
             errorItem.title = "⚠︎ \(error)"
             errorItem.isHidden = false
+        } else {
+            errorItem.isHidden = true
         }
     }
 
@@ -248,7 +260,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, VimHost {
 
     @objc private func toggleEnabled() {
         enabled.toggle()
-        if !enabled { collapseBlockCursor() }
+        if !enabled {
+            if prompt.isOpen { engine?.promptCancel() }
+            collapseBlockCursor()
+        }
         engine?.forgetScreen()
         updateMenuState()
         updateStatusTitle()

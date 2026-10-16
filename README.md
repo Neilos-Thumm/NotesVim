@@ -6,7 +6,7 @@ Obsidian's Vim mode comes from [replit/codemirror-vim](https://github.com/replit
 
 NotesVim only does anything while Notes is the frontmost app and the cursor is in a note body. Everywhere else, keys pass straight through.
 
-## Install
+## Installation
 
 You need a Mac with the Xcode command-line tools (`xcode-select --install`), or Xcode itself.
 
@@ -18,15 +18,37 @@ make install        # builds build/NotesVim.app, copies it to /Applications, lau
 
 On first launch macOS asks for Accessibility permission. Open **System Settings → Privacy & Security → Accessibility**, switch **NotesVim** on, and NotesVim starts working within a couple of seconds. The menu bar then shows `-- NORMAL --` when you're in Notes.
 
+To start NotesVim automatically when you log in, add it under **System Settings → General → Login Items**.
+
 **Signing.** The build script signs with your *Apple Development* certificate if it finds one. Xcode creates it when you pick your Apple ID as a signing team. With that certificate, macOS remembers the Accessibility permission across rebuilds. Without it, the app is signed ad-hoc and you need to switch the permission off and on again after every rebuild. To choose a certificate explicitly, set `NOTESVIM_SIGN_IDENTITY`.
+
+## Updating
+
+After changing any code (`Sources/`, `Resources/`), run this in the project folder:
+
+```bash
+make install
+```
+
+That's all. It rebuilds, quits the running NotesVim, replaces `/Applications/NotesVim.app` and relaunches it. Don't touch the Accessibility setting: the app is signed with my Apple Development certificate, so macOS keeps the permission.
+
+Only `~/.notesvimrc` changes skip the rebuild: use **Reload ~/.notesvimrc** in the menu bar.
+
+**If the menu bar shows `VIM ⚠︎` after an update** (permission lost):
+
+1. Quit NotesVim first (menu bar → **Quit NotesVim**). Toggling Accessibility while it's running freezes the keyboard.
+2. **System Settings → Privacy & Security → Accessibility**: switch **NotesVim** off, then on.
+3. `open /Applications/NotesVim.app`
 
 ## Use
 
-- Notes opens in **normal mode**, like a file in Obsidian. Press `i`, `a`, `o` and so on to type, and `Esc` (or `Ctrl-[`) to go back.
+- Notes opens in **normal mode**, like a file in Obsidian. Press `i`, `a`, `o` and so on to type, and `Esc` (or `Ctrl-[` / `Ctrl-c`) to go back.
+- **Insert mode is plain Notes.** Every key behaves exactly as it does without NotesVim (Ctrl-D, Ctrl-T, Ctrl-O, Option-arrows…). Only `Esc`, `Ctrl-[`, `Ctrl-c` and your own `imap`s go to Vim. Vim's insert-mode commands (`Ctrl-w`, `Ctrl-u`, `Ctrl-o`, `Ctrl-r`…) are not used.
 - **⌘ shortcuts always go to Notes** (⌘C, ⌘V, ⌘B, ⌘Z…), in every mode.
 - `u` and `Ctrl-r` use Notes' own undo history (Edit → Undo / Redo).
-- `:` and `/` open a small command bar at the bottom of the Notes window. Press Enter to run, or Esc to cancel.
-- `"+y` and `"+p` use the system clipboard. Other registers stay inside Vim, as in Obsidian.
+- `:` and `/` open a small command bar at the bottom of the Notes window. Just type: Notes keeps focus and your keys go into the bar, never the note. Enter runs, Esc (or Backspace on an empty bar) cancels, `↑`/`↓` go through history, `Ctrl-u`/`Ctrl-w` delete, ⌘V pastes.
+- While recording a macro, the menu bar shows `recording @a`.
+- `"+y` and `"+p` use the system clipboard. Other registers stay inside Vim, as in Obsidian. NotesVim never touches the clipboard otherwise.
 - In normal mode, the cursor is drawn as a one-character selection, standing in for Vim's block cursor. You can turn this off in the menu.
 
 ### Menu bar
@@ -78,12 +100,12 @@ key press ─▶ event tap (KeyTap.swift)
 
 - `notes-adapter.js` implements the editor interface the engine expects. It's modelled on the CodeMirror 6 adapter that Obsidian uses, over a plain-text copy of the note. Before each key it reads the note's text and selection from Notes; typing done in insert mode is picked up as a change, so `.` and macros can repeat it.
 - Edits are made by selecting a range and replacing the selected text through Accessibility, so formatting outside the edit is preserved.
-- Keys Vim doesn't use in insert mode go to Notes untouched. In normal and visual mode nothing reaches the note, the same as Obsidian.
+- In insert mode, every key except the ones that leave it goes to Notes untouched. If Notes refuses an Accessibility edit, NotesVim types the text as key presses instead (never via the clipboard), and shows a warning in the menu until the next edit succeeds. In normal and visual mode nothing reaches the note, the same as Obsidian.
 
 ## Development
 
 ```bash
-make test   # 46 behaviour tests: the real engine + adapter + a fake Notes (needs Node)
+make test   # behaviour tests: the real engine + adapter + a fake Notes (needs Node)
 make run    # run from the terminal (Accessibility permission then goes to your terminal app)
 make app    # build build/NotesVim.app without installing
 ```

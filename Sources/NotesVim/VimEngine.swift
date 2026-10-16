@@ -7,7 +7,9 @@ protocol VimHost: AnyObject {
     func vimModeChanged(_ mode: String)
     func vimNotify(_ text: String, durationMs: Int)
     func vimOpenPrompt(prefix: String, desc: String, value: String)
+    func vimUpdatePrompt(_ value: String)
     func vimClosePrompt()
+    func vimSetStatus(_ text: String)
 }
 
 /// Runs Obsidian's Vim engine (vim.js) plus the Notes adapter in JavaScriptCore.
@@ -37,9 +39,16 @@ final class VimEngine {
             return nil
         }
         // vim.js is an ES module; JavaScriptCore scripts can't use `export`.
-        vimSource = vimSource.replacingOccurrences(of: "export function initVim", with: "function initVim")
+        // Strip `export { ... }` lists and `export` / `export default` keywords.
+        vimSource = vimSource
+            .replacingOccurrences(of: #"(?m)^export\s*\{[^}]*\};?[ \t]*$"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"(?m)^export\s+(default\s+)?"#, with: "", options: .regularExpression)
 
         context.evaluateScript(vimSource, withSourceURL: vimURL)
+        guard let initVim = context.objectForKeyedSubscript("initVim") as JSValue?, initVim.isObject else {
+            NSLog("NotesVim: vim.js did not define initVim (has the engine's export changed?)")
+            return nil
+        }
         context.evaluateScript(adapterSource, withSourceURL: adapterURL)
 
         guard let api = context.objectForKeyedSubscript("NotesVim") as JSValue?, !api.isUndefined else {
@@ -61,7 +70,6 @@ final class VimEngine {
         return result.toBool()
     }
 
-    func promptSubmit(_ value: String) { api?.invokeMethod("promptSubmit", withArguments: [value]) }
     func promptCancel() { api?.invokeMethod("promptCancel", withArguments: []) }
     func loadVimrc(_ source: String) { api?.invokeMethod("loadVimrc", withArguments: [source]) }
     func forgetScreen() { api?.invokeMethod("forgetScreen", withArguments: []) }
@@ -108,8 +116,14 @@ final class VimEngine {
         let openPrompt: @convention(block) (String, String, String) -> Void = { [weak self] prefix, desc, value in
             self?.host?.vimOpenPrompt(prefix: prefix, desc: desc, value: value)
         }
+        let updatePrompt: @convention(block) (String) -> Void = { [weak self] value in
+            self?.host?.vimUpdatePrompt(value)
+        }
         let closePrompt: @convention(block) () -> Void = { [weak self] in
             self?.host?.vimClosePrompt()
+        }
+        let setStatus: @convention(block) (String) -> Void = { [weak self] text in
+            self?.host?.vimSetStatus(text)
         }
         let clipboardRead: @convention(block) () -> String = {
             NSPasteboard.general.string(forType: .string) ?? ""
@@ -141,7 +155,9 @@ final class VimEngine {
         expose("setMode", unsafeBitCast(setMode, to: AnyObject.self))
         expose("notify", unsafeBitCast(notify, to: AnyObject.self))
         expose("openPrompt", unsafeBitCast(openPrompt, to: AnyObject.self))
+        expose("updatePrompt", unsafeBitCast(updatePrompt, to: AnyObject.self))
         expose("closePrompt", unsafeBitCast(closePrompt, to: AnyObject.self))
+        expose("setStatus", unsafeBitCast(setStatus, to: AnyObject.self))
         expose("clipboardRead", unsafeBitCast(clipboardRead, to: AnyObject.self))
         expose("clipboardWrite", unsafeBitCast(clipboardWrite, to: AnyObject.self))
         expose("setTimer", unsafeBitCast(setTimer, to: AnyObject.self))

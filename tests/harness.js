@@ -17,6 +17,7 @@ function createNotes(initialText, caret) {
     elementChanged: false,
     log: [],
     prompt: null,
+    status: '',
     notifications: [],
     mode: null,
     timers: [],
@@ -65,7 +66,9 @@ function createNotes(initialText, caret) {
     setMode(m) { notes.mode = m; },
     notify(text) { notes.notifications.push(text); },
     openPrompt(prefix, desc, value) { notes.prompt = { prefix, desc, value }; },
+    updatePrompt(value) { if (notes.prompt) notes.prompt.value = value; },
     closePrompt() { notes.prompt = null; },
+    setStatus(text) { notes.status = text; },
     clipboardRead() { return notes.clipboard; },
     clipboardWrite(t) { notes.clipboard = t; },
     setTimer(id, ms) { notes.timers.push({ id, ms }); },
@@ -76,7 +79,9 @@ function createNotes(initialText, caret) {
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   const vimSource = fs.readFileSync(path.join(RES, 'vim.js'), 'utf8')
-    .replace(/^export function initVim/m, 'function initVim');
+    // Same stripping of ES-module syntax as VimEngine.swift.
+    .replace(/^export\s*\{[^}]*\};?[ \t]*$/gm, '')
+    .replace(/^export\s+(default\s+)?/gm, '');
   vm.runInContext(vimSource, sandbox, { filename: 'vim.js' });
   vm.runInContext(fs.readFileSync(path.join(RES, 'notes-adapter.js'), 'utf8'), sandbox, { filename: 'notes-adapter.js' });
 

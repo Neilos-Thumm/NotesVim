@@ -274,6 +274,66 @@ test('macros: qa ... q, then @a', () => {
   assert.strictEqual(ctx.notes.text, '- x\n- x\n- x');
 });
 
+test('macro recording shows a status, not the command bar', () => {
+  const ctx = setup('x', 0);
+  press(ctx, 'qa');
+  assert.strictEqual(ctx.notes.prompt, null);
+  assert.strictEqual(ctx.notes.status, 'recording @a');
+  press(ctx, 'q');
+  assert.strictEqual(ctx.notes.status, '');
+});
+
+// --- command bar typed through the key tap ------------------------------------
+test(':s typed key by key runs on Enter', () => {
+  const ctx = setup('a cat\nanother cat', 0);
+  press(ctx, ':s/cat/dog/<CR>');
+  assert.strictEqual(ctx.notes.text, 'a dog\nanother cat');
+  assert.strictEqual(ctx.notes.prompt, null);
+  press(ctx, ':%s/a/A/g<CR>');
+  assert.strictEqual(ctx.notes.text, 'A dog\nAnother cAt');
+});
+
+test('the bar shows what is typed, and keys never reach the note', () => {
+  const ctx = setup('abc', 0);
+  press(ctx, ':xyz');
+  assert.deepStrictEqual(ctx.notes.prompt, { prefix: ':', desc: '', value: 'xyz' });
+  assert.strictEqual(ctx.notes.text, 'abc');
+  press(ctx, '<BS>');
+  assert.strictEqual(ctx.notes.prompt.value, 'xy');
+});
+
+test('Esc, and Backspace on an empty bar, cancel without running', () => {
+  const ctx = setup('abc', 0);
+  press(ctx, ':s/a/b/<Esc>');
+  assert.strictEqual(ctx.notes.prompt, null);
+  press(ctx, ':<BS>');
+  assert.strictEqual(ctx.notes.prompt, null);
+  assert.strictEqual(ctx.notes.text, 'abc');
+  assert.strictEqual(ctx.notes.mode, 'normal');
+});
+
+test('/ typed key by key searches on Enter, n repeats', () => {
+  const ctx = setup('one foo two foo', 0);
+  press(ctx, '/foo<CR>');
+  assert.deepStrictEqual(cursor(ctx), [0, 4]);
+  press(ctx, 'n');
+  assert.deepStrictEqual(cursor(ctx), [0, 12]);
+});
+
+test('<Up> recalls the previous command, <C-u> clears, Cmd-V pastes', () => {
+  const ctx = setup('aaa', 0);
+  press(ctx, ':s/a/b/<CR>');
+  press(ctx, ':<Up>');
+  assert.strictEqual(ctx.notes.prompt.value, 's/a/b/');
+  press(ctx, '<C-u>');
+  assert.strictEqual(ctx.notes.prompt.value, '');
+  ctx.notes.clipboard = 's/a/c/\nignored';
+  ctx.NotesVim.handleKey({ key: 'v', code: 'KeyV', ctrlKey: false, altKey: false, metaKey: true, shiftKey: false });
+  assert.strictEqual(ctx.notes.prompt.value, 's/a/c/');
+  press(ctx, '<CR>');
+  assert.strictEqual(ctx.notes.text, 'bca');
+});
+
 // --- vimrc -------------------------------------------------------------------------
 test('vimrc: imap jk <Esc> leaves insert mode', () => {
   const ctx = setup('', 0, { vimrc: 'imap jk <Esc>' });
@@ -359,10 +419,46 @@ test('R replace mode overwrites characters', () => {
   assert.strictEqual(ctx.notes.text, 'xycdef');
 });
 
-test('<C-o> runs one normal command from insert mode', () => {
-  const ctx = setup('one two', 0);
-  press(ctx, 'i<C-o>w!');
-  assert.strictEqual(ctx.notes.text, 'one !two');
+test('insert mode leaves Vim insert commands (<C-w>, <C-o>, ...) to Notes', () => {
+  const ctx = setup('one two', 7);
+  press(ctx, 'a');
+  for (const k of ['w', 'u', 'o', 'r', 't', 'd', 'h']) {
+    const used = ctx.NotesVim.handleKey({ key: k, code: '', ctrlKey: true, altKey: false, metaKey: false, shiftKey: false });
+    assert.strictEqual(used, false, `<C-${k}> should reach Notes`);
+  }
+  assert.strictEqual(ctx.notes.text, 'one two');
+  assert.strictEqual(ctx.notes.mode, 'insert');
+});
+
+test('<C-c> and <C-[> leave insert mode', () => {
+  const ctx = setup('abc', 0);
+  press(ctx, 'ix<C-c>');
+  assert.strictEqual(ctx.notes.mode, 'normal');
+  press(ctx, 'iy<C-[>');
+  assert.strictEqual(ctx.notes.mode, 'normal');
+  assert.strictEqual(ctx.notes.text, 'yxabc');
+});
+
+test('imap with a Ctrl key still works', () => {
+  const ctx = setup('', 0, { vimrc: 'imap <C-j> <Esc>' });
+  press(ctx, 'ihi<C-j>');
+  assert.strictEqual(ctx.notes.mode, 'normal');
+  assert.strictEqual(ctx.notes.text, 'hi');
+});
+
+test('imap jk: a lone j followed by another letter types both', () => {
+  const ctx = setup('', 0, { vimrc: 'imap jk <Esc>' });
+  press(ctx, 'ijam');
+  assert.strictEqual(ctx.notes.text, 'jam');
+  assert.strictEqual(ctx.notes.mode, 'insert');
+});
+
+test(':imap from the command bar is honoured in insert mode', () => {
+  const ctx = setup('', 0);
+  press(ctx, ':'); submitPrompt(ctx, 'imap <C-l> <Esc>');
+  press(ctx, 'iok<C-l>');
+  assert.strictEqual(ctx.notes.mode, 'normal');
+  assert.strictEqual(ctx.notes.text, 'ok');
 });
 
 test('gqq hard-wraps a long line', () => {

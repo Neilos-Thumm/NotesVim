@@ -96,6 +96,7 @@ final class NotesBridge {
             lastError = "Couldn't move the cursor (Accessibility error \(result.rawValue))"
             return false
         }
+        lastError = nil
         return true
     }
 
@@ -111,7 +112,7 @@ final class NotesBridge {
         if text.isEmpty {
             if length > 0 { postKey(51) } // Delete (backspace) removes the selection
         } else {
-            pasteViaClipboard(text)
+            typeText(text) // replaces the selection; never touches the clipboard
         }
         return false
     }
@@ -155,15 +156,6 @@ final class NotesBridge {
         // Accessibility uses a top-left origin on the primary screen.
         let y = primary.frame.maxY - origin.y - size.height
         return NSRect(x: origin.x, y: y, width: size.width, height: size.height)
-    }
-
-    func activateNotes() {
-        guard let app = notesApp else { return }
-        if #available(macOS 14.0, *) {
-            app.activate()
-        } else {
-            app.activate(options: [.activateIgnoringOtherApps])
-        }
     }
 
     // MARK: - Undo / redo through the Edit menu
@@ -226,16 +218,35 @@ final class NotesBridge {
         }
     }
 
-    private func pasteViaClipboard(_ text: String) {
-        let board = NSPasteboard.general
-        let saved = board.string(forType: .string)
-        board.clearContents()
-        board.setString(text, forType: .string)
-        postKey(9, flags: .maskCommand) // ⌘V
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(300)) {
-            board.clearContents()
-            if let saved { board.setString(saved, forType: .string) }
+    /// Types `text` into Notes as synthetic key presses. Newlines are sent as
+    /// Return; everything else as Unicode strings of at most 20 UTF-16 units
+    /// (the most one key event carries), never splitting a character.
+    private func typeText(_ text: String) {
+        guard let pid = notesApp?.processIdentifier else { return }
+        func post(_ units: [UniChar]) {
+            for down in [true, false] {
+                guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: down) else { continue }
+                event.flags = []
+                event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+                event.setIntegerValueField(.eventSourceUserData, value: KeyTap.syntheticMarker)
+                event.postToPid(pid)
+            }
         }
+        var chunk: [UniChar] = []
+        for character in text {
+            if character == "\n" || character == "\r\n" {
+                if !chunk.isEmpty { post(chunk); chunk = [] }
+                postKey(36) // Return
+                continue
+            }
+            let units = Array(String(character).utf16)
+            if chunk.count + units.count > 20, !chunk.isEmpty {
+                post(chunk)
+                chunk = []
+            }
+            chunk += units
+        }
+        if !chunk.isEmpty { post(chunk) }
     }
 
     // MARK: - Accessibility helpers

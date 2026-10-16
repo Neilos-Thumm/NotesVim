@@ -18,8 +18,11 @@
  *   native.scrollTo(offset)       -> bool
  *   native.setMode(name)          -> void   e.g. "normal", "insert", "visual line"
  *   native.notify(text, ms)       -> void
- *   native.openPrompt(prefix, desc, value) -> void   result arrives via NotesVim.promptSubmit/promptCancel
+ *   native.openPrompt(prefix, desc, value) -> void   show the command bar (display only;
+ *                                 its keys arrive through NotesVim.handleKey)
+ *   native.updatePrompt(value)    -> void   the command bar's text changed
  *   native.closePrompt()          -> void
+ *   native.setStatus(text)        -> void   e.g. "recording @a"; '' clears it
  *   native.clipboardRead() -> string, native.clipboardWrite(text) -> void
  *   native.setTimer(id, ms)       -> void   host calls NotesVim.fireTimer(id) later
  *   native.log(text)              -> void
@@ -1109,11 +1112,23 @@
     var cm = this;
     this._closeNotification();
     var parts = templateParts(template);
-    var input = parts.input || new FakeNode('input');
+    if (!parts.input) {
+      // A message with nothing to type (e.g. "recording @a"): show it as a
+      // status next to the mode instead of opening the command bar.
+      native.setStatus(parts.prefix);
+      var statusShown = true;
+      return function () {
+        if (!statusShown) return;
+        statusShown = false;
+        native.setStatus('');
+      };
+    }
+    var input = parts.input;
     if (options.value) input.value = options.value;
     var closed = false;
     var prompt = {
       input: input,
+      prefix: parts.prefix,
       callback: callback,
       options: options,
       close: function (newVal) {
@@ -1131,6 +1146,44 @@
     native.openPrompt(parts.prefix, parts.desc, input.value || '');
     return prompt.close;
   };
+
+  // The command bar never has keyboard focus (Notes keeps it), so while it's
+  // open every key comes through handleKey and is applied here.
+  function promptKey(evt) {
+    var prompt = activePrompt;
+    var vim = cm.state.vim || Vim.maybeInitVimState_(cm);
+    var key = Vim.vimKeyFromEvent(evt, vim);
+    var value = prompt.input.value || '';
+
+    if (key === '<Esc>' || key === '<C-c>' || key === '<C-[>' || (key === '<BS>' && value === '')) {
+      NotesVim.promptCancel();
+      return;
+    }
+    if (key === '<CR>') {
+      NotesVim.promptSubmit(value);
+      return;
+    }
+    if (key === '<Up>' || key === '<Down>') {
+      if (prompt.options.onKeyDown) {
+        var up = key === '<Up>';
+        prompt.options.onKeyDown(fakeKeyEvent(up ? 'ArrowUp' : 'ArrowDown', up ? 38 : 40), value, prompt.close);
+      }
+    } else if (key === '<BS>') {
+      prompt.input.value = Array.from(value).slice(0, -1).join('');
+    } else if (key === '<C-u>') {
+      prompt.input.value = '';
+    } else if (key === '<C-w>') {
+      prompt.input.value = value.replace(/(\w+|[^\w\s]+)?\s*$/, '');
+    } else if (evt.metaKey) {
+      if (String(evt.key).toLowerCase() === 'v') {
+        prompt.input.value = value + String(native.clipboardRead() || '').split(/\r?\n/)[0];
+      }
+    } else if (evt.key && evt.key.length >= 1 && !evt.ctrlKey && !/^[A-Z][a-zA-Z]+$/.test(evt.key)) {
+      // A typed character (named keys like "Tab" or "ArrowLeft" are ignored).
+      prompt.input.value = value + evt.key;
+    }
+    if (activePrompt === prompt) native.updatePrompt(prompt.input.value || '');
+  }
 
   P.openNotification = function (template, options) {
     var duration = options && typeof options.duration !== 'undefined' ? options.duration : 5000;
@@ -1254,8 +1307,46 @@
   // ---------------------------------------------------------------------------
   // Public API used by the host
   // ---------------------------------------------------------------------------
+  if (typeof global.initVim !== 'function') {
+    throw new Error('notes-adapter.js: vim.js did not define initVim (has its export changed?)');
+  }
   var Vim = global.initVim(NotesCM);
   var cm = new NotesCM();
+
+  // --- insert mode belongs to Notes ------------------------------------------
+  // In insert mode only the keys that leave it (and the user's own imaps) go
+  // to Vim. Vim's other insert-mode keys (<C-w>, <C-o>, <C-r>, <C-d>, ...) are
+  // left to Notes, so typing behaves exactly as it does without NotesVim.
+  var INSERT_EXIT_KEYS = { '<Esc>': true, '<C-[>': true, '<C-c>': true };
+  // First keys of `imap` / `inoremap` left-hand sides that aren't plain characters.
+  var userInsertKeys = Object.create(null);
+
+  function insertKeyBelongsToNotes(vim, key) {
+    if (!vim.insertMode || cm.state.overwrite || cm.ranges.length > 1) return false;
+    if (INSERT_EXIT_KEYS[key]) return false;
+    if (vim.inputState && vim.inputState.keyBuffer.length) return false; // inside an imap like "jk"
+    // Plain characters still pass through Vim so imaps can see them; Vim has
+    // no insert-mode command on a single character, so they reach Notes as typed.
+    if (key.length === 1) return false;
+    return !userInsertKeys[key];
+  }
+
+  function abbrevOf(word, full, minLength) {
+    return word.length >= minLength && full.indexOf(word) === 0;
+  }
+
+  // Note insert-mode mappings made by an ex command (vimrc line or ":" prompt).
+  function trackMapping(line) {
+    var m = /^:*\s*(\w+)!?\s*(\S*)/.exec(String(line));
+    if (!m) return;
+    var cmd = m[1];
+    if (abbrevOf(cmd, 'imapclear', 5) || abbrevOf(cmd, 'mapclear', 4)) {
+      userInsertKeys = Object.create(null);
+    } else if (m[2] && (abbrevOf(cmd, 'imap', 2) || abbrevOf(cmd, 'inoremap', 3))) {
+      var first = m[2].split(/(<(?:[CSMA]-)*\w+>|.)/i).filter(Boolean)[0];
+      if (first && first.length > 1) userInsertKeys[first] = true;
+    }
+  }
 
   var NotesVim = {
     Vim: Vim,
@@ -1294,6 +1385,7 @@
         }
         try {
           Vim.handleEx(cm, line);
+          trackMapping(line);
         } catch (e) {
           native.log('vimrc: could not run "' + line + '": ' + e);
         }
@@ -1303,6 +1395,10 @@
     // evt: { key, code, ctrlKey, altKey, metaKey, shiftKey }
     // Returns true if the key was used by Vim and must not reach Notes.
     handleKey: function (evt) {
+      if (activePrompt) {
+        promptKey(evt);
+        return true;
+      }
       if (!cm.sync()) return false;
       var vim = cm.state.vim || Vim.maybeInitVimState_(cm);
       var key = Vim.vimKeyFromEvent(evt, vim);
@@ -1311,6 +1407,13 @@
       if (vim.insertMode && (evt.key === 'Backspace' || evt.key === 'Delete')) {
         // Recorded for "." the same way CodeMirror's input field reports it.
         cm.getInputField().dispatch('keydown', fakeKeyEvent(evt.key, evt.key === 'Backspace' ? 8 : 46));
+      }
+
+      if (insertKeyBelongsToNotes(vim, key)) {
+        // Insert mode is plain Notes: the key is typed (or handled) by Notes
+        // itself, and sync() picks the result up on the next key.
+        cm._lastPushed = null;
+        return false;
       }
 
       if (key == '<Esc>' && !vim.insertMode && !vim.visualMode) {
@@ -1389,6 +1492,7 @@
       if (!handled) {
         try {
           if (prompt.callback) prompt.callback(value);
+          if (/^:/.test(prompt.prefix)) trackMapping(value);
         } catch (e) {
           native.log('Vim command error: ' + (e && e.stack || e));
         }
