@@ -1473,8 +1473,10 @@
       }
 
       // Outside insert mode nothing may be typed into the note, even for keys
-      // Vim does not use (same as CodeMirror's disableInput).
-      if (!vim.insertMode) return true;
+      // Vim does not use (same as CodeMirror's disableInput). Control+Option
+      // keys can't type text, so unused ones are let through: they're other
+      // apps' global shortcuts (e.g. Rectangle's window keys).
+      if (!vim.insertMode) return !!result || !(evt.ctrlKey && evt.altKey);
       return !!result;
     },
 

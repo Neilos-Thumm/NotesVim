@@ -157,6 +157,17 @@ test('typing in insert mode reaches Notes; Esc steps back one', () => {
 });
 
 // --- normal mode never types ----------------------------------------------------
+test('unused Control+Option keys pass through in normal mode (window managers)', () => {
+  const ctx = setup('abc', 0);
+  const ev = (key, code) => ({ key, code, ctrlKey: true, altKey: true, metaKey: false, shiftKey: false });
+  assert.strictEqual(ctx.NotesVim.handleKey(ev('ArrowLeft', '')), false);
+  assert.strictEqual(ctx.NotesVim.handleKey(ev('f', 'KeyF')), false);
+  assert.strictEqual(ctx.NotesVim.handleKey(ev('Enter', '')), false);
+  press(ctx, 'v');
+  assert.strictEqual(ctx.NotesVim.handleKey(ev('ArrowRight', '')), false);
+  assert.strictEqual(ctx.notes.text, 'abc');
+});
+
 test('normal mode swallows keys Vim does not use', () => {
   const ctx = setup('abc', 0);
   const used = ctx.NotesVim.handleKey({ key: 'Q', shiftKey: true });
