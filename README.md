@@ -18,7 +18,27 @@ make install        # builds build/NotesVim.app, copies it to /Applications, lau
 
 On first launch macOS asks for Accessibility permission. Open **System Settings → Privacy & Security → Accessibility**, switch **NotesVim** on, and NotesVim starts working within a couple of seconds. The menu bar then shows `-- NORMAL --` when you're in Notes.
 
-To start NotesVim automatically when you log in, add it under **System Settings → General → Login Items**.
+**Start at login:** **System Settings → General → Login Items & Extensions**, under **Open at Login** click **+**, go to **Applications** and pick **NotesVim.app**. Always pick the one in `/Applications`, not the one in the project's `build/` folder.
+
+### Where the app lives (two copies, on purpose)
+
+`make install` leaves two copies of `NotesVim.app`:
+
+| Copy | What it is |
+| --- | --- |
+| `/Applications/NotesVim.app` | **The real one.** Installed and running; Accessibility and Login Items point here. |
+| `build/NotesVim.app` (in this folder) | A leftover from the build. It never runs by itself, and `make install` overwrites it every time. |
+
+That's fine and not a duplicate install. Just never open the `build/` copy (double-click, or picking it in Spotlight): that would start a second NotesVim alongside the real one. `make clean` deletes it (plus the `.build` compile cache) whenever you like; the next `make install` recreates it.
+
+### Remove completely
+
+1. Menu bar → **Quit NotesVim** (do this first: changing Accessibility while it runs freezes the keyboard).
+2. Delete `/Applications/NotesVim.app` (drag to Trash).
+3. `make clean` in this folder, to delete `build/` and `.build/`.
+4. **System Settings → Privacy & Security → Accessibility**: select NotesVim and click **−**.
+5. **System Settings → General → Login Items & Extensions**: remove NotesVim if you added it.
+6. Optional: `rm ~/.notesvimrc` and `defaults delete com.parun.NotesVim` (your mappings and menu settings).
 
 **Signing.** The build script signs with your *Apple Development* certificate if it finds one. Xcode creates it when you pick your Apple ID as a signing team. With that certificate, macOS remembers the Accessibility permission across rebuilds. Without it, the app is signed ad-hoc and you need to switch the permission off and on again after every rebuild. To choose a certificate explicitly, set `NOTESVIM_SIGN_IDENTITY`.
 
