@@ -6,6 +6,8 @@ Obsidian's Vim mode comes from [replit/codemirror-vim](https://github.com/replit
 
 NotesVim only does anything while Notes is the frontmost app and the cursor is in a note body. Everywhere else, keys pass straight through.
 
+https://github.com/user-attachments/assets/528a9b20-aa69-45a5-aa0d-5b1bbe79879a
+
 ## Installation
 
 You need a Mac with the Xcode command-line tools (`xcode-select --install`), or Xcode itself.
